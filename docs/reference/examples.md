@@ -152,6 +152,20 @@ black 18.9b0
 pipx 0.10.0
 ```
 
+Use `--include-injected` to see packages injected into main app environments:
+
+```
+> pipx list --include-injected
+venvs are in /Users/user/.local/pipx/venvs
+binaries are exposed on your $PATH at /Users/user/.local/bin
+   package pycowsay 0.0.0.2, Python 3.10.0
+    - pycowsay
+    Injected Packages:
+      - black 24.3.0
+          - black
+          - blackd
+```
+
 ## `pipx install-all` example
 
 ```shell
