@@ -781,7 +781,7 @@ def _add_list(subparsers: argparse._SubParsersAction, shared_parser: argparse.Ar
     p.add_argument(
         "--include-injected",
         action="store_true",
-        help="Show packages injected into the main app's environment",
+        help="Show packages injected into the main app's environment, including their exposed apps",
     )
     g = p.add_mutually_exclusive_group()
     g.add_argument("--json", action="store_true", help="Output rich data in json format.")
