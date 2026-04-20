@@ -263,3 +263,19 @@ def test_list_installed_packages_error(monkeypatch, tmp_path, fake_process):
     expected = f"Failed to execute {pip_list_args}.\nProcess exited with return code 1.\nstderr: unit test stderr"
 
     assert actual == expected
+
+
+def test_list_injected_packages_with_apps(pipx_temp_env, capsys):
+    assert not run_pipx_cli(["install", "pycowsay"])
+    assert not run_pipx_cli(["inject", "pycowsay", PKG["black"]["spec"], "--include-apps"])
+    captured = capsys.readouterr()
+
+    black_apps = PKG["black"]["apps"]
+
+    assert not run_pipx_cli(["list", "--include-injected"])
+    captured = capsys.readouterr()
+
+    assert "Injected Packages:" in captured.out
+    assert "black" in captured.out
+    for app in black_apps:
+        assert app in captured.out

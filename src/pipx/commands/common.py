@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from shutil import which
 from tempfile import TemporaryDirectory
-from typing import Optional
+from typing import Any, Optional
 
 import userpath  # type: ignore[import-not-found]
 from packaging.utils import canonicalize_name
@@ -209,6 +209,39 @@ def venv_health_check(venv: Venv, package_name: Optional[str] = None) -> tuple[V
     return (VenvProblems(), "")
 
 
+def get_exposed_info_for_package(
+    venv_bin_path: Path,
+    venv_man_path: Path,
+    package_metadata: PackageInfo,
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    apps = package_metadata.apps
+    man_pages = package_metadata.man_pages
+    if package_metadata.include_dependencies:
+        apps += package_metadata.apps_of_dependencies
+        man_pages += package_metadata.man_pages_of_dependencies
+
+    exposed_app_paths = get_exposed_paths_for_package(
+        venv_bin_path,
+        paths.ctx.bin_dir,
+        [add_suffix(app, package_metadata.suffix) for app in apps],
+    )
+    exposed_binary_names = sorted(p.name for p in exposed_app_paths)
+    unavailable_binary_names = sorted(
+        {add_suffix(name, package_metadata.suffix) for name in package_metadata.apps} - set(exposed_binary_names)
+    )
+    exposed_man_paths = set()
+    for man_section in MAN_SECTIONS:
+        exposed_man_paths |= get_exposed_man_paths_for_package(
+            venv_man_path / man_section,
+            paths.ctx.man_dir / man_section,
+            man_pages,
+        )
+    exposed_man_pages = sorted(str(Path(p.parent.name) / p.name) for p in exposed_man_paths)
+    unavailable_man_pages = sorted(set(package_metadata.man_pages) - set(exposed_man_pages))
+
+    return (exposed_binary_names, unavailable_binary_names, exposed_man_pages, unavailable_man_pages)
+
+
 def get_venv_summary(
     venv_dir: Path,
     *,
@@ -226,32 +259,31 @@ def get_venv_summary(
         return (warning_message, venv_problems)
 
     package_metadata = venv.package_metadata[package_name]
-    apps = package_metadata.apps
-    man_pages = package_metadata.man_pages
-    if package_metadata.include_dependencies:
-        apps += package_metadata.apps_of_dependencies
-        man_pages += package_metadata.man_pages_of_dependencies
+    (
+        exposed_binary_names,
+        unavailable_binary_names,
+        exposed_man_pages,
+        unavailable_man_pages,
+    ) = get_exposed_info_for_package(venv.bin_path, venv.man_path, package_metadata)
 
-    exposed_app_paths = get_exposed_paths_for_package(
-        venv.bin_path,
-        paths.ctx.bin_dir,
-        [add_suffix(app, package_metadata.suffix) for app in apps],
-    )
-    exposed_binary_names = sorted(p.name for p in exposed_app_paths)
-    unavailable_binary_names = sorted(
-        {add_suffix(name, package_metadata.suffix) for name in package_metadata.apps} - set(exposed_binary_names)
-    )
-    exposed_man_paths = set()
-    for man_section in MAN_SECTIONS:
-        exposed_man_paths |= get_exposed_man_paths_for_package(
-            venv.man_path / man_section,
-            paths.ctx.man_dir / man_section,
-            man_pages,
-        )
-    exposed_man_pages = sorted(str(Path(p.parent.name) / p.name) for p in exposed_man_paths)
-    unavailable_man_pages = sorted(set(package_metadata.man_pages) - set(exposed_man_pages))
-    # The following is to satisfy mypy that python_version is str and not
-    #   Optional[str]
+    injected_packages_info: Optional[dict[str, dict[str, Any]]] = None
+    if include_injected and venv.pipx_metadata.injected_packages:
+        injected_packages_info = {}
+        for inj_name, inj_metadata in venv.pipx_metadata.injected_packages.items():
+            (
+                inj_exposed_binaries,
+                inj_unavailable_binaries,
+                inj_exposed_man_pages,
+                inj_unavailable_man_pages,
+            ) = get_exposed_info_for_package(venv.bin_path, venv.man_path, inj_metadata)
+            injected_packages_info[inj_name] = {
+                "metadata": inj_metadata,
+                "exposed_binary_names": inj_exposed_binaries,
+                "unavailable_binary_names": inj_unavailable_binaries,
+                "exposed_man_pages": inj_exposed_man_pages,
+                "unavailable_man_pages": inj_unavailable_man_pages,
+            }
+
     python_version = venv.pipx_metadata.python_version if venv.pipx_metadata.python_version is not None else ""
     source_interpreter = venv.pipx_metadata.source_interpreter
     is_standalone = (
@@ -270,7 +302,7 @@ def get_venv_summary(
             unavailable_binary_names,
             exposed_man_pages,
             unavailable_man_pages,
-            venv.pipx_metadata.injected_packages if include_injected else None,
+            injected_packages_info,
             suffix=package_metadata.suffix,
         ),
         venv_problems,
@@ -336,7 +368,7 @@ def _get_list_output(
     unavailable_binary_names: list[str],
     exposed_man_pages: list[str],
     unavailable_man_pages: list[str],
-    injected_packages: Optional[dict[str, PackageInfo]] = None,
+    injected_packages_info: Optional[dict[str, dict[str, Any]]] = None,
     suffix: str = "",
 ) -> str:
     output = []
@@ -359,9 +391,24 @@ def _get_list_output(
     output.extend(
         f"    - {red(name)} (symlink missing or pointing to unexpected location)" for name in unavailable_man_pages
     )
-    if injected_packages:
+    if injected_packages_info:
         output.append("    Injected Packages:")
-        output.extend(f"      - {name} {injected_packages[name].package_version}" for name in injected_packages)
+        for inj_name, inj_info in injected_packages_info.items():
+            inj_metadata = inj_info["metadata"]
+            inj_exposed_binaries = inj_info["exposed_binary_names"]
+            inj_unavailable_binaries = inj_info["unavailable_binary_names"]
+            inj_exposed_man_pages = inj_info["exposed_man_pages"]
+            inj_unavailable_man_pages = inj_info["unavailable_man_pages"]
+
+            output.append(f"      - {bold(inj_name)} {inj_metadata.package_version}")
+            for app_name in inj_exposed_binaries:
+                output.append(f"          - {app_name}")
+            for app_name in inj_unavailable_binaries:
+                output.append(f"          - {red(app_name)} (symlink missing or pointing to unexpected location)")
+            for man_page in inj_exposed_man_pages:
+                output.append(f"          - {man_page}")
+            for man_page in inj_unavailable_man_pages:
+                output.append(f"          - {red(man_page)} (symlink missing or pointing to unexpected location)")
     return "\n".join(output)
 
 
