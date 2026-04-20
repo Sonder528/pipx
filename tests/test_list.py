@@ -279,3 +279,19 @@ def test_list_injected_packages_with_apps(pipx_temp_env, capsys):
     assert "black" in captured.out
     for app in black_apps:
         assert app in captured.out
+
+
+def test_list_injected_packages_without_include_apps(pipx_temp_env, capsys):
+    assert not run_pipx_cli(["install", "pycowsay"])
+    assert not run_pipx_cli(["inject", "pycowsay", PKG["black"]["spec"]])
+    captured = capsys.readouterr()
+
+    black_apps = PKG["black"]["apps"]
+
+    assert not run_pipx_cli(["list", "--include-injected"])
+    captured = capsys.readouterr()
+
+    assert "Injected Packages:" in captured.out
+    assert "black" in captured.out
+    for app in black_apps:
+        assert app not in captured.out
